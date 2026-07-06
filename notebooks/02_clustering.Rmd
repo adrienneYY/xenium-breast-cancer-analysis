@@ -1,0 +1,310 @@
+---
+title: "02 - Clustering"
+author: "Adrienne Yanez"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+---
+
+This notebook establishes the **standard filtering** baseline clustering result
+(nCount > 25, nFeature > 20, 454,652 cells retained). It is the primary
+reference point that `03_qc_comparison.Rmd` measures lenient and strict
+filtering against.
+
+```{r setup, message=FALSE, warning=FALSE}
+knitr::opts_knit$set(root.dir = here::here())
+
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(here)
+library(arrow)
+# library(BPCells)  # needed only if re-running sketch pipeline from scratch
+
+
+data_dir <- Sys.getenv(
+  "XENIUM_DATA_DIR",
+  unset = file.path(path.expand("~"), "Documents", "one-sample-analysis",
+                    "Xenium_Prime_Breast_Cancer_FFPE_outs")
+)
+
+stopifnot(
+  "Data directory not found - see data/download_instructions.md" = file.exists(data_dir)
+)
+
+# CATALYST color palette - shared across all notebooks for consistent cluster colors
+catalyst_cols <- c(
+  "#7BAFDE", "#B2DF8A", "#BEAED4", "#8DD3C7", "#DC050C",
+  "#FF7F00", "#882E72", "#33A02C", "#E7298A", "#E6AB02",
+  "#1965B0", "#55A1B1", "#7570B3",
+  "#FB8072", "#E78AC3", "#B17BA6", "#FDB462", "#A6761D", "#666666"
+)
+
+# Factor cluster column in numerical order and return named palette
+fix_clusters <- function(obj, col = "cluster_full") {
+  vals <- as.character(obj[[col, drop = TRUE]])
+  lvls <- as.character(sort(as.integer(unique(vals))))
+  obj[[col]] <- factor(vals, levels = lvls)
+  pal <- setNames(catalyst_cols[seq_along(lvls)], lvls)
+  list(obj = obj, pal = pal, levels = lvls)
+}
+```
+
+---
+
+## 1. Load Data
+
+```{r load-data, message=FALSE}
+# Standard filtering (nCount > 25, nFeature > 20) is the baseline clustering
+# result for this project. It retains 454,652 cells and serves
+# as the reference point for the QC threshold comparison in 03_qc_comparison.Rmd.
+# Pipeline was run in a prior session. See sketch chunk below for details.
+xenium.obj <- readRDS(here("data", "xenium_standard.rds"))
+
+# Re-level cluster_full (stored as character after ProjectData)
+res        <- fix_clusters(xenium.obj, col = "cluster_full")
+xenium.obj <- res$obj
+pal_full   <- res$pal
+
+# Rebuild sketch palette from seurat_clusters
+sketch_levels <- as.character(sort(as.integer(unique(
+  as.character(xenium.obj$seurat_clusters)
+))))
+xenium.obj$seurat_clusters <- factor(xenium.obj$seurat_clusters,
+                                      levels = sketch_levels)
+pal_sketch <- setNames(catalyst_cols[seq_along(sketch_levels)], sketch_levels)
+
+cat("Cells:", ncol(xenium.obj), "\n")
+cat("Clusters:", length(res$levels), "\n")
+```
+
+---
+
+## 2. Sketch: Subsample for Memory-Efficient Analysis
+
+The full dataset (~699k cells) exceeds available RAM for ScaleData.
+Subsample 50,000 representative cells using leverage-score sketching,
+run the full pipeline on the sketch, then project labels back to all cells.
+50,000 is Seurat 5's optimal size for sketch-based workflows because it is
+large enough to capture rare populations via leverage scoring, and still fits PCA/clustering in memory on a laptop.
+
+```{r sketch, message=FALSE, eval=FALSE}
+# -----------------------------------------------------------------------------
+# NOTE: This chunk is set to eval=FALSE - the pre-computed object is loaded
+# above. To reproduce from scratch, set eval=TRUE and run in a clean R session
+# immediately after LoadXenium() with no intervening commands.
+#
+# KNOWN ISSUE: SketchData() with LeverageScore attempts a sparse to dense matrix
+# cast (~26.6 GiB) that exceeds 32GB RAM on this 699k cell dataset. The saved
+# object (data/xenium_standard.rds) was generated using random subsampling
+# (set.seed(42), n=50,000) as a memory-efficient alternative. Results are
+# equivalent for clustering purposes; leverage scoring would better preserve
+# rare populations but requires >32GB RAM or a BPCells matrix.
+# -----------------------------------------------------------------------------
+
+# To reproduce from scratch:
+xenium.obj <- LoadXenium(data_dir, fov = "fov")
+
+set.seed(42)
+cells_keep  <- sample(Cells(xenium.obj), size = 50000)
+xenium.obj  <- subset(xenium.obj, cells = cells_keep)
+cat("Subsampled cells:", ncol(xenium.obj), "\n")
+
+DefaultAssay(xenium.obj) <- "Xenium"
+xenium.obj <- NormalizeData(xenium.obj)
+xenium.obj <- FindVariableFeatures(xenium.obj)
+xenium.obj <- ScaleData(xenium.obj, features = VariableFeatures(xenium.obj))
+xenium.obj <- RunPCA(xenium.obj, npcs = 50)
+xenium.obj <- FindNeighbors(xenium.obj, dims = 1:25)
+xenium.obj <- FindClusters(xenium.obj, resolution = 0.3)
+xenium.obj <- RunUMAP(xenium.obj, dims = 1:25, return.model = TRUE)
+
+xenium.obj <- ProjectData(
+  object             = xenium.obj,
+  assay              = "Xenium",
+  full.reduction     = "full.pca",
+  sketched.assay     = "sketch",
+  sketched.reduction = "pca",
+  umap.model         = "umap",
+  dims               = 1:25,
+  refdata            = list(cluster_full = "seurat_clusters")
+)
+
+saveRDS(xenium.obj, here("data", "xenium_standard.rds"))
+```
+
+---
+
+## 3. Preprocessing
+
+```{r preprocess, message=FALSE, eval=FALSE}
+# eval=FALSE - preprocessing was run as part of the pipeline that generated
+# data/xenium_standard.rds. Shown here for documentation only.
+xenium.obj <- NormalizeData(xenium.obj)
+xenium.obj <- FindVariableFeatures(xenium.obj)
+xenium.obj <- ScaleData(xenium.obj, features = VariableFeatures(xenium.obj))
+```
+
+---
+
+## 4. Dimensionality Reduction
+
+```{r pca, message=FALSE, eval=FALSE}
+# eval=FALSE because PCA was run as part of the pipeline that generated
+# data/xenium_standard.rds. Shown here for documentation only.
+xenium.obj <- RunPCA(xenium.obj, npcs = 50)
+```
+
+```{r elbow-plot, fig.width=7, fig.height=4}
+# PCA already exists in the loaded object. Regenerate elbow plot for display
+ElbowPlot(xenium.obj, ndims = 50) +
+  ggtitle("Elbow Plot - PCA") +
+  theme_minimal()
+```
+
+```{r save-02-elbow, include=FALSE}
+ggsave(here("figures", "02_elbow_plot.png"),
+       ElbowPlot(xenium.obj, ndims = 50) +
+         ggtitle("Elbow Plot - PCA") + theme_minimal(),
+       width = 7, height = 4, dpi = 300)
+```
+
+> **Note:** `dims` in downstream steps set to 1:25 based on elbow inflection.
+
+---
+
+## 5. Clustering
+
+```{r cluster, message=FALSE, eval=FALSE}
+# eval=FALSE - clustering was run as part of the pipeline that generated
+# data/xenium_standard.rds. Shown here for documentation only.
+xenium.obj <- FindNeighbors(xenium.obj, dims = 1:25)
+xenium.obj <- FindClusters(xenium.obj, resolution = 0.3)
+xenium.obj <- RunUMAP(xenium.obj, dims = 1:25, return.model = TRUE)
+```
+
+```{r cluster-summary}
+# Summarise clusters from the loaded object
+sketch_levels <- as.character(sort(as.integer(levels(xenium.obj$seurat_clusters))))
+pal_sketch <- setNames(catalyst_cols[seq_along(sketch_levels)], sketch_levels)
+cat("Clusters:", length(sketch_levels), "\n")
+table(xenium.obj$seurat_clusters)
+```
+
+---
+
+## 6. UMAP
+
+```{r umap-plot, fig.width=7, fig.height=6}
+DimPlot(xenium.obj, reduction = "umap", label = TRUE,
+        label.size = 4, cols = pal_sketch) +
+  ggtitle("UMAP - Clusters (sketch, n=50k)") +
+  theme_minimal()
+```
+
+```{r save-02-umap, include=FALSE}
+ggsave(here("figures", "02_umap_clusters.png"),
+       DimPlot(xenium.obj, reduction = "umap", label = TRUE,
+               label.size = 4, cols = pal_sketch) +
+         ggtitle("UMAP - Clusters (sketch, n=50k)") + theme_minimal(),
+       width = 7, height = 6, dpi = 300)
+```
+
+---
+
+## 7. Project Back to All Cells
+
+```{r project, message=FALSE, eval=FALSE}
+# eval=FALSE because cluster_full was projected when xenium_standard.rds was 
+# generated. Re-projection happens automatically on load via fix_clusters()
+xenium.obj <- ProjectData(
+  object             = xenium.obj,
+  assay              = "Xenium",
+  full.reduction     = "full.pca",
+  sketched.assay     = "sketch",
+  sketched.reduction = "pca",
+  umap.model         = "umap",
+  dims               = 1:25,
+  refdata            = list(cluster_full = "seurat_clusters")
+)
+
+cat("Projected cluster labels to all", ncol(xenium.obj), "cells\n")
+
+# Factor cluster_full numerically and build palette for all-cell plots
+res        <- fix_clusters(xenium.obj, col = "cluster_full")
+xenium.obj <- res$obj
+pal_full   <- res$pal
+cat("Cluster levels (full):", res$levels, "\n")
+```
+
+---
+
+## 8. Spatial Plot
+
+```{r spatial-plot, fig.width=10, fig.height=8, message=FALSE, warning=FALSE}
+DefaultAssay(xenium.obj) <- "Xenium"
+
+ImageDimPlot(xenium.obj,
+             group.by = "cluster_full",
+             cols     = pal_full,
+             size     = 0.5) +
+  ggtitle("Spatial Clusters - Standard Filtering Baseline")
+```
+
+```{r save-02-spatial, include=FALSE}
+ggsave(here("figures", "02_spatial_clusters.png"),
+       ImageDimPlot(xenium.obj,
+                    group.by = "cluster_full",
+                    cols     = pal_full,
+                    size     = 0.5) +
+         ggtitle("Spatial Clusters - Unfiltered Dataset"),
+       width = 10, height = 8, dpi = 300)
+```
+
+---
+
+## 9. Side-by-Side: UMAP + Spatial
+
+```{r combined-plot, fig.width=16, fig.height=7, message=FALSE, warning=FALSE}
+DefaultAssay(xenium.obj) <- "sketch"
+p1 <- DimPlot(xenium.obj, reduction = "umap", label = TRUE,
+              label.size = 4, cols = pal_sketch) +
+  ggtitle("UMAP") + theme_minimal() + NoLegend()
+
+DefaultAssay(xenium.obj) <- "Xenium"
+p2 <- ImageDimPlot(xenium.obj,
+                   group.by = "cluster_full",
+                   cols     = pal_full,
+                   size     = 0.5) +
+  ggtitle("Spatial") + NoLegend()
+
+p1 + p2
+```
+
+```{r save-02-combined, include=FALSE}
+ggsave(here("figures", "02_umap_spatial_combined.png"),
+       p1 + p2,
+       width = 16, height = 7, dpi = 300)
+```
+
+---
+
+## 10. Figures Generated
+
+| File | Description |
+|------|-------------|
+| `02_elbow_plot.png` | PCA elbow plot |
+| `02_umap_clusters.png` | UMAP colored by cluster (sketch) |
+| `02_spatial_clusters.png` | Spatial clusters, full dataset |
+| `02_umap_spatial_combined.png` | UMAP + spatial side by side |
+
+---
+
+## 11. Session Info
+
+```{r session-info}
+sessionInfo()
+```

@@ -1,0 +1,5 @@
+"condition","min_counts","min_features","cells_retained","pct_of_raw","n_clusters"
+"Unfiltered",NA,NA,699110,100,NA
+"Lenient",10,10,490610,70.2,13
+"Standard",25,20,454652,65,11
+"Strict",100,50,184408,26.4,14

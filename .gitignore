@@ -1,0 +1,33 @@
+# Raw / derived data (too large for git, see data/download_instructions.md)
+data/*.parquet
+data/*.zarr
+data/*.h5
+data/*.rds
+data/*.RData
+data/*.tar.gz
+data/*.zip
+data/wu_et_al/
+data/bp_counts/
+
+# R session artifacts
+.Rproj.user/
+.RData
+.RDataTmp
+.Rhistory
+
+# Python artifacts
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# renv library (lockfile IS tracked; local library is not)
+renv/library/
+renv/local/
+renv/staging/
+
+# OS
+.DS_Store
+
+# Leftover path from an earlier project layout
+one-sample-analysis/
+.RDataTmp*

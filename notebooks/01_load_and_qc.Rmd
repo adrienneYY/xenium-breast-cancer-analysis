@@ -1,0 +1,65 @@
+---
+title: "01 - Load Data & Baseline QC"
+author: "Adrienne Yanez"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+---
+
+Before applying any QC filtering or clustering, obtain a baseline read on
+the raw Xenium output: how many cells were called, and how many transcripts
+and genes were detected per cell. Xenium's targeted panel is far sparser
+than scRNA-seq (median ~49 transcripts and ~46 genes/cell here), so these
+baseline distributions are what determine the three QC filtering thresholds
+compared in `03_qc_comparison.Rmd`.
+
+```{r setup, message=FALSE, warning=FALSE}
+knitr::opts_knit$set(root.dir = here::here())
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(here)
+library(arrow)
+
+# Data directory is not tracked in this repo.
+# Set XENIUM_DATA_DIR in a local .Renviron to override.
+# See data/download_instructions.md to download the dataset.
+data_dir <- Sys.getenv(
+  "XENIUM_DATA_DIR",
+  unset = file.path(path.expand("~"), "Documents", "one-sample-analysis",
+                    "Xenium_Prime_Breast_Cancer_FFPE_outs")
+)
+
+stopifnot(
+  "Data directory not found — see data/download_instructions.md" = file.exists(data_dir)
+)
+
+xenium.obj <- LoadXenium(data_dir, fov = "fov")
+```
+
+```{r qc, message=FALSE, warning=FALSE}
+# Violin plots of per-cell transcript/gene counts, unfiltered. These
+# distributions are the basis for the lenient/standard/strict thresholds
+
+# "standard" (nCount > 25, nFeature > 20) sits just above
+# the median so it removes the sparse tail without discarding typical cells
+p <- VlnPlot(xenium.obj, features = c("nCount_Xenium", "nFeature_Xenium"), ncol = 2, pt.size = 0)
+ggsave(here("figures", "qc_violin_unfiltered.png"), plot = p, width = 10, height = 5, dpi = 300)
+
+# baseline stats
+qc_summary <- data.frame(
+  metric = c("Total cells (unfiltered)", "Total genes", "Median counts per cell", "Median genes per cell"),
+  value  = c(
+    ncol(xenium.obj),
+    nrow(xenium.obj),
+    median(xenium.obj$nCount_Xenium),
+    median(xenium.obj$nFeature_Xenium)
+  )
+)
+write.csv(qc_summary, here("figures", "qc_summary_unfiltered.csv"), row.names = FALSE)
+
+print(qc_summary)
+```

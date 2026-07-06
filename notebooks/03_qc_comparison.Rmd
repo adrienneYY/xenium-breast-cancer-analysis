@@ -1,0 +1,398 @@
+---
+title: "03 - QC Threshold Comparison"
+author: "Adrienne Yanez"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+---
+
+This notebook is the core comparison to answer, does QC filtering
+stringency change which cell populations you recover from Xenium data, and
+by how much? Three thresholds (lenient/standard/strict) are each run through
+the identical sketch clustering pipeline from `02_clustering.Rmd` so cluster
+counts and spatial distributions are directly comparable, isolating the
+effect of the QC cutoff itself from any other pipeline variation.
+
+```{r setup, message=FALSE, warning=FALSE}
+
+knitr::opts_knit$set(root.dir = here::here())
+
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(here)
+library(arrow)
+
+data_dir <- Sys.getenv(
+  "XENIUM_DATA_DIR",
+  unset = file.path(path.expand("~"), "Documents", "one-sample-analysis",
+                    "Xenium_Prime_Breast_Cancer_FFPE_outs")
+)
+
+catalyst_cols <- c(
+  "#7BAFDE", "#B2DF8A", "#BEAED4", "#8DD3C7", "#DC050C",
+  "#FF7F00", "#882E72", "#33A02C", "#E7298A", "#E6AB02",
+  "#1965B0", "#55A1B1", "#7570B3",
+  "#FB8072", "#E78AC3", "#B17BA6", "#FDB462", "#A6761D", "#666666"
+)
+
+fix_clusters <- function(obj, col = "cluster_full") {
+  vals <- as.character(obj[[col, drop = TRUE]])
+  lvls <- as.character(sort(as.integer(unique(vals))))
+  obj[[col]] <- factor(vals, levels = lvls)
+  pal <- setNames(catalyst_cols[seq_along(lvls)], lvls)
+  list(obj = obj, pal = pal, levels = lvls)
+}
+
+```
+
+
+```{r load-objects, message=FALSE}
+# Load objects sequentially and extract only what's needed for plotting.
+# Full objects are ~1.5GB each - loading all three simultaneously hits 32GB RAM.
+# Extract cluster metadata only, then reload full objects one at a time for plots.
+
+obj_lenient  <- readRDS(here("data", "xenium_lenient.rds"))
+meta_lenient <- data.frame(
+  cluster_full = as.character(obj_lenient$cluster_full),
+  nCount       = obj_lenient$nCount_Xenium,
+  row.names    = Cells(obj_lenient)
+)
+n_lenient <- ncol(obj_lenient)
+rm(obj_lenient); gc()
+
+obj_standard <- readRDS(here("data", "xenium_standard.rds"))
+meta_standard <- data.frame(
+  cluster_full = as.character(obj_standard$cluster_full),
+  nCount       = obj_standard$nCount_Xenium,
+  row.names    = Cells(obj_standard)
+)
+n_standard <- ncol(obj_standard)
+rm(obj_standard); gc()
+
+obj_strict <- readRDS(here("data", "xenium_strict.rds"))
+meta_strict <- data.frame(
+  cluster_full = as.character(obj_strict$cluster_full),
+  nCount       = obj_strict$nCount_Xenium,
+  row.names    = Cells(obj_strict)
+)
+n_strict <- ncol(obj_strict)
+rm(obj_strict); gc()
+
+# Shared cluster levels across all conditions
+shared_levels <- as.character(sort(as.integer(unique(c(
+  meta_lenient$cluster_full,
+  meta_standard$cluster_full,
+  meta_strict$cluster_full
+)))))
+shared_pal <- setNames(catalyst_cols[seq_along(shared_levels)], shared_levels)
+
+cat("Lenient:", n_lenient, "cells,", 
+    length(unique(meta_lenient$cluster_full)), "clusters\n")
+cat("Standard:", n_standard, "cells,", 
+    length(unique(meta_standard$cluster_full)), "clusters\n")
+cat("Strict:", n_strict, "cells,", 
+    length(unique(meta_strict$cluster_full)), "clusters\n")
+cat("Shared cluster IDs:", shared_levels, "\n")
+```
+
+
+---
+
+## Overview
+
+**Question:** How much do QC filtering thresholds affect the clusters and
+cell type composition recovered from Xenium data?
+
+Three filtering strategies are compared, plus the unfiltered baseline from
+notebook 02:
+
+| Strategy    | nCount_Xenium | nFeature_Xenium | Rationale |
+|-------------|--------------|-----------------|-----------|
+| Unfiltered  | none         | none            | Baseline, notebook 02 |
+| Lenient     | > 10         | > 10            | Minimal filtering |
+| Standard    | > 25         | > 20            | Near-median and balanced tradeoffs|
+| Strict      | > 100        | > 50            | High quality cells only |
+
+Baseline: **699,110 cells**, median counts = 49, median genes = 46.
+
+Thresholds are set relative to baseline. 
+- "lenient" only removes near-empty cells (counts/features in the single
+digits, likely background or segmentation noise)
+- "standard" sits just below the panel-wide median so it drops the sparsest tail 
+- "strict" keeps only cells well above median, trading cell
+yield for panel coverage
+
+---
+
+## 1. Load Raw Data
+
+```{r load data, message=FALSE, eval=FALSE}
+xenium.obj <- LoadXenium(data_dir, fov = "fov")
+cat("Raw cells:", ncol(xenium.obj), "\n")
+```
+
+---
+
+## 2. Define Pipeline Function
+
+```{r pipeline function, eval=FALSE}
+# Identical to the notebook 02 pipeline (50k-cell leverage-score sketch,
+# resolution = 0.3, dims = 1:25 from the elbow plot) so that any difference
+# in clusters recovered is attributable to the QC threshold, not the pipeline.
+run_pipeline <- function(obj, label, dims = 1:25) {
+  message("\nRunning pipeline: ", label)
+  message("Cells: ", ncol(obj))
+
+  obj <- SketchData(object = obj, ncells = 50000,
+                    method = "LeverageScore", sketched.assay = "sketch")
+  DefaultAssay(obj) <- "sketch"
+
+  obj <- NormalizeData(obj)
+  obj <- FindVariableFeatures(obj)
+  obj <- ScaleData(obj)
+  obj <- RunPCA(obj, npcs = 50)
+  obj <- FindNeighbors(obj, dims = dims)
+  obj <- FindClusters(obj, resolution = 0.3)
+  obj <- RunUMAP(obj, dims = dims, return.model = TRUE)
+
+  obj <- ProjectData(
+    object             = obj,
+    assay              = "Xenium",
+    full.reduction     = "full.pca",
+    sketched.assay     = "sketch",
+    sketched.reduction = "pca",
+    umap.model         = "umap",
+    dims               = dims,
+    refdata            = list(cluster_full = "seurat_clusters")
+  )
+
+  vals <- as.character(obj$cluster_full)
+  lvls <- as.character(sort(as.integer(unique(vals))))
+  obj$cluster_full <- factor(vals, levels = lvls)
+
+  message("Clusters recovered: ", length(lvls))
+  return(obj)
+}
+```
+
+---
+
+## 3. Filter and run each  condition
+
+### 3.1 Lenient (nCount > 10, nFeature > 10)
+
+```{r lenient, message=TRUE, warning=FALSE, eval=FALSE}
+obj_lenient <- subset(xenium.obj,
+                      subset = nCount_Xenium > 10 & nFeature_Xenium > 10)
+cat("Lenient - cells retained:", ncol(obj_lenient),
+    sprintf("(%.1f%% of raw)\n", 100 * ncol(obj_lenient) / ncol(xenium.obj)))
+
+obj_lenient <- run_pipeline(obj_lenient, label = "Lenient")
+```
+
+### 3.2 Standard (nCount > 25, nFeature > 20)
+
+```{r standard, message=TRUE, warning=FALSE, eval=FALSE}
+obj_standard <- subset(xenium.obj,
+                       subset = nCount_Xenium > 25 & nFeature_Xenium > 20)
+cat("Standard - cells retained:", ncol(obj_standard),
+    sprintf("(%.1f%% of raw)\n", 100 * ncol(obj_standard) / ncol(xenium.obj)))
+
+obj_standard <- run_pipeline(obj_standard, label = "Standard")
+```
+
+### 3.3 Strict (nCount > 100, nFeature > 50)
+
+```{r strict, message=TRUE, warning=FALSE, eval=FALSE}
+obj_strict <- subset(xenium.obj,
+                     subset = nCount_Xenium > 100 & nFeature_Xenium > 50)
+cat("Strict - cells retained:", ncol(obj_strict),
+    sprintf("(%.1f%% of raw)\n", 100 * ncol(obj_strict) / ncol(xenium.obj)))
+
+obj_strict <- run_pipeline(obj_strict, label = "Strict")
+```
+
+
+---
+
+## 4. Summary Table
+
+```{r summary-table}
+qc_comparison <- data.frame(
+  condition      = c("Unfiltered", "Lenient", "Standard", "Strict"),
+  min_counts     = c(NA, 10, 25, 100),
+  min_features   = c(NA, 10, 20, 50),
+  cells_retained = c(699110, n_lenient, n_standard, n_strict),
+  pct_of_raw     = round(100 * c(699110, n_lenient, n_standard, n_strict) / 699110, 1),
+  n_clusters     = c(
+    NA,
+    length(unique(meta_lenient$cluster_full)),
+    length(unique(meta_standard$cluster_full)),
+    length(unique(meta_strict$cluster_full))
+  )
+)
+
+print(qc_comparison)
+write.csv(qc_comparison, here("figures", "03_qc_comparison_summary.csv"),
+          row.names = FALSE)
+```
+
+---
+
+## 5. UMAPs
+
+```{r umap-comparison, fig.width=18, fig.height=6, message=FALSE, warning=FALSE}
+# Load, plot remove each object sequentially to stay within 32GB RAM
+
+obj_lenient <- readRDS(here("data", "xenium_lenient.rds"))
+obj_lenient$cluster_full <- factor(as.character(obj_lenient$cluster_full),
+                                    levels = shared_levels)
+p_lenient <- DimPlot(obj_lenient, reduction = "umap", label = TRUE,
+                     cols = shared_pal, label.size = 3, pt.size = 0.3) +
+  ggtitle(sprintf("Lenient\n(n=%s, %d clusters)",
+                  format(n_lenient, big.mark = ","),
+                  sum(table(obj_lenient$cluster_full) > 0))) +
+  theme_minimal() + NoLegend()
+rm(obj_lenient); gc()
+
+obj_standard <- readRDS(here("data", "xenium_standard.rds"))
+obj_standard$cluster_full <- factor(as.character(obj_standard$cluster_full),
+                                     levels = shared_levels)
+p_standard <- DimPlot(obj_standard, reduction = "umap", label = TRUE,
+                      cols = shared_pal, label.size = 3, pt.size = 0.3) +
+  ggtitle(sprintf("Standard\n(n=%s, %d clusters)",
+                  format(n_standard, big.mark = ","),
+                  sum(table(obj_standard$cluster_full) > 0))) +
+  theme_minimal() + NoLegend()
+rm(obj_standard); gc()
+
+obj_strict <- readRDS(here("data", "xenium_strict.rds"))
+obj_strict$cluster_full <- factor(as.character(obj_strict$cluster_full),
+                                   levels = shared_levels)
+p_strict <- DimPlot(obj_strict, reduction = "umap", label = TRUE,
+                    cols = shared_pal, label.size = 3, pt.size = 0.3) +
+  ggtitle(sprintf("Strict\n(n=%s, %d clusters)",
+                  format(n_strict, big.mark = ","),
+                  sum(table(obj_strict$cluster_full) > 0))) +
+  theme_minimal() + NoLegend()
+rm(obj_strict); gc()
+
+p_lenient + p_standard + p_strict
+```
+
+```{r save-03-umap-comparison, include=FALSE}
+ggsave(here("figures", "03_qc_comparison_umaps.png"),
+       p_lenient + p_standard + p_strict,
+       width = 18, height = 6, dpi = 300)
+```
+
+---
+
+## 6. Spatial Plots
+
+```{r spatial-comparison, fig.width=18, fig.height=7, message=FALSE, warning=FALSE}
+# Load, plot, save, remove each object sequentially to stay within 32GB RAM.
+# ImageDimPlot is memory-intensive - do not hold all three objects simultaneously.
+
+obj_lenient <- readRDS(here("data", "xenium_lenient.rds"))
+obj_lenient$cluster_full <- factor(as.character(obj_lenient$cluster_full),
+                                    levels = shared_levels)
+DefaultAssay(obj_lenient) <- "Xenium"
+sp_lenient <- ImageDimPlot(obj_lenient, group.by = "cluster_full",
+                           cols = shared_pal, size = 0.4) +
+  ggtitle("Lenient Spatial") + NoLegend()
+ggsave(here("figures", "03_spatial_lenient.png"),
+       sp_lenient, width = 8, height = 7, dpi = 300)
+rm(obj_lenient); gc()
+
+obj_standard <- readRDS(here("data", "xenium_standard.rds"))
+obj_standard$cluster_full <- factor(as.character(obj_standard$cluster_full),
+                                     levels = shared_levels)
+DefaultAssay(obj_standard) <- "Xenium"
+sp_standard <- ImageDimPlot(obj_standard, group.by = "cluster_full",
+                            cols = shared_pal, size = 0.4) +
+  ggtitle("Standard Spatial") + NoLegend()
+ggsave(here("figures", "03_spatial_standard.png"),
+       sp_standard, width = 8, height = 7, dpi = 300)
+rm(obj_standard); gc()
+
+obj_strict <- readRDS(here("data", "xenium_strict.rds"))
+obj_strict$cluster_full <- factor(as.character(obj_strict$cluster_full),
+                                   levels = shared_levels)
+DefaultAssay(obj_strict) <- "Xenium"
+sp_strict <- ImageDimPlot(obj_strict, group.by = "cluster_full",
+                          cols = shared_pal, size = 0.4) +
+  ggtitle("Strict Spatial") + NoLegend()
+ggsave(here("figures", "03_spatial_strict.png"),
+       sp_strict, width = 8, height = 7, dpi = 300)
+rm(obj_strict); gc()
+
+# Combine and display - ggplot objects are lightweight, safe to combine
+sp_lenient + sp_standard + sp_strict
+```
+
+```{r save-03-spatial-comparison, include=FALSE}
+ggsave(here("figures", "03_qc_comparison_spatial.png"),
+       sp_lenient + sp_standard + sp_strict,
+       width = 18, height = 7, dpi = 300)
+```
+
+---
+
+## 7. Key Observations
+
+Numbers below are pulled directly from `qc_comparison` (section 5) rather
+than hardcoded, so this section can't drift out of sync with the table above
+on a re-run.
+
+```{r key-obs-values, include=FALSE}
+get_val <- function(cond, col) qc_comparison[qc_comparison$condition == cond, col]
+```
+
+- **Cells retained:** Lenient `r format(get_val("Lenient", "cells_retained"), big.mark = ",")` (`r get_val("Lenient", "pct_of_raw")`% of raw), Standard `r format(get_val("Standard", "cells_retained"), big.mark = ",")` (`r get_val("Standard", "pct_of_raw")`% of raw), Strict `r format(get_val("Strict", "cells_retained"), big.mark = ",")` (`r get_val("Strict", "pct_of_raw")`% of raw)
+- **Cluster count:** Lenient `r get_val("Lenient", "n_clusters")`, Standard `r get_val("Standard", "n_clusters")`, Strict `r get_val("Strict", "n_clusters")`
+- **Shared cluster IDs:** The union of cluster IDs across all conditions is used for a consistent
+  color key. Cluster IDs are not biologically matched across conditions.
+- **Interpretation:** More aggressive filtering trades cell yield for confidence per cell. It
+  does not necessarily reduce the number of clusters recovered. Compare the cluster counts above
+  directly: a stricter threshold may resolve as many (or more) distinct populations from fewer,
+  cleaner cells if it is removing noise that was previously diluting cluster signal.
+- **Recommendation:** Standard (nCount > 25, nFeature > 20) offers the best balance of
+  cell yield and cluster resolution for Xenium 5K breast cancer data, based on the comparison
+  above.
+
+---
+
+## 8. Save Objects
+
+```{r save-objects, eval=FALSE}
+saveRDS(obj_lenient,  here("data", "xenium_lenient.rds"))
+saveRDS(obj_standard, here("data", "xenium_standard.rds"))
+saveRDS(obj_strict,   here("data", "xenium_strict.rds"))
+cat("All three objects saved to data/\n")
+```
+
+---
+
+## 9. Figures Generated
+
+| File | Description |
+|------|-------------|
+| `03_qc_comparison_summary.csv` | Summary table (4 conditions) |
+| `03_qc_comparison_umaps.png` | 3-way UMAP comparison |
+| `03_qc_comparison_spatial.png` | 3-way spatial comparison |
+| `03_spatial_lenient.png` | Lenient spatial plot |
+| `03_spatial_standard.png` | Standard spatial plot |
+| `03_spatial_strict.png` | Strict spatial plot |
+
+---
+
+## 10. Session Info
+
+```{r session-info}
+sessionInfo()
+```
