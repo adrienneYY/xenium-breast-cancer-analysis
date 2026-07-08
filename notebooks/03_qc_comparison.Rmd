@@ -9,12 +9,12 @@ output:
     theme: flatly
 ---
 
-This notebook is the core comparison to answer, does QC filtering
-stringency change which cell populations you recover from Xenium data, and
-by how much? Three thresholds (lenient/standard/strict) are each run through
-the identical sketch clustering pipeline from `02_clustering.Rmd` so cluster
+This notebook is the core comparison to address how QC filtering
+stringency changes which cell populations are recovered from Xenium data.
+Three thresholds (lenient/standard/strict) are each run through
+the identical clustering pipeline from `02_clustering.Rmd` so cluster
 counts and spatial distributions are directly comparable, isolating the
-effect of the QC cutoff itself from any other pipeline variation.
+effect of the QC cutoff itself from any other  variation.
 
 ```{r setup, message=FALSE, warning=FALSE}
 
@@ -82,7 +82,7 @@ meta_strict <- data.frame(
 n_strict <- ncol(obj_strict)
 rm(obj_strict); gc()
 
-# Shared cluster levels across all conditions
+# shared cluster levels across all conditions for color consistency
 shared_levels <- as.character(sort(as.integer(unique(c(
   meta_lenient$cluster_full,
   meta_standard$cluster_full,
@@ -105,7 +105,7 @@ cat("Shared cluster IDs:", shared_levels, "\n")
 ## Overview
 
 **Question:** How much do QC filtering thresholds affect the clusters and
-cell type composition recovered from Xenium data?
+recovered from Xenium data?
 
 Three filtering strategies are compared, plus the unfiltered baseline from
 notebook 02:
@@ -122,7 +122,7 @@ Baseline: **699,110 cells**, median counts = 49, median genes = 46.
 Thresholds are set relative to baseline. 
 - "lenient" only removes near-empty cells (counts/features in the single
 digits, likely background or segmentation noise)
-- "standard" sits just below the panel-wide median so it drops the sparsest tail 
+- "standard" is just below the dataset median, so it drops the sparsest cells
 - "strict" keeps only cells well above median, trading cell
 yield for panel coverage
 
@@ -140,16 +140,19 @@ cat("Raw cells:", ncol(xenium.obj), "\n")
 ## 2. Define Pipeline Function
 
 ```{r pipeline function, eval=FALSE}
-# Identical to the notebook 02 pipeline (50k-cell leverage-score sketch,
-# resolution = 0.3, dims = 1:25 from the elbow plot) so that any difference
-# in clusters recovered is attributable to the QC threshold, not the pipeline.
+# Identical to the notebook 02 pipeline (50k random subsample, set.seed(42),
+# resolution = 0.3, dims = 1:25 from the elbow plot). NOTE: eval=FALSE,
+# saved objects are loaded directly above. SketchData() with LeverageScore
+# was the original approach but exceeds 32GB RAM on this dataset.
+
 run_pipeline <- function(obj, label, dims = 1:25) {
   message("\nRunning pipeline: ", label)
   message("Cells: ", ncol(obj))
 
-  obj <- SketchData(object = obj, ncells = 50000,
-                    method = "LeverageScore", sketched.assay = "sketch")
-  DefaultAssay(obj) <- "sketch"
+ set.seed(42)
+  cells_keep <- sample(Cells(obj), size = min(50000, ncol(obj)))
+  obj <- subset(obj, cells = cells_keep)
+  message("Subsampled to: ", ncol(obj), " cells")
 
   obj <- NormalizeData(obj)
   obj <- FindVariableFeatures(obj)
@@ -163,7 +166,6 @@ run_pipeline <- function(obj, label, dims = 1:25) {
     object             = obj,
     assay              = "Xenium",
     full.reduction     = "full.pca",
-    sketched.assay     = "sketch",
     sketched.reduction = "pca",
     umap.model         = "umap",
     dims               = dims,

@@ -29,27 +29,27 @@ Applied identically to the unfiltered baseline (`02_clustering.Rmd`) and to
 each of the three filtered objects (`03_qc_comparison.Rmd`), so cluster
 counts and spatial patterns are comparable across conditions:
 
-1. **Sketch** — `SketchData(ncells = 50000, method = "LeverageScore")`.
-   The full dataset doesn't fit in memory for `ScaleData()`/PCA, so a
-   50,000-cell representative subsample is drawn via leverage score
-   sampling, which biases toward transcriptionally distinct cells rather
-   than sampling uniformly, better preserving rare populations.
-2. **Normalize / feature selection** — `NormalizeData()`,
-   `FindVariableFeatures()` (defaults) on the sketch.
-3. **Scale** — `ScaleData()` on variable features only, sketch assay only
-   (the full `Xenium` assay's `scale.data` is discarded immediately after
-   use to free memory — see `gc()` in `02_clustering.Rmd`).
-4. **PCA** — `RunPCA(npcs = 50)`; `dims = 1:25` used downstream based on
+1. **Subsampling** - 50,000 cells were randomly sampled from each filtered
+   object (`sample(Cells(), size = 50000), set.seed(42)`). `SketchData()` 
+   with `LeverageScore` was attempted but exceeds 32GB RAM on this 699k-cell dataset. Random 
+   subsampling was used as an alternative. Results are 
+   equivalent for identifying major cell lineages; leverage scoring would 
+   better preserve rare populations but requires >32GB RAM.
+2. **Normalize / feature selection** - `NormalizeData()`,
+   `FindVariableFeatures()` (defaults) on the subsampled cells.
+3. **Scale** — `ScaleData()` on variable features only, on the 50k 
+   subsampled cells.
+4. **PCA** - `RunPCA(npcs = 50)`; `dims = 1:25` used downstream based on
    the elbow-plot inflection point (`figures/02_elbow_plot.png`).
-5. **Clustering** — `FindNeighbors(dims = 1:25)` +
+5. **Clustering** - `FindNeighbors(dims = 1:25)` +
    `FindClusters(resolution = 0.3)`. Resolution 0.3 is coarse,
    targeting major lineages (epithelial/tumor, immune, stromal,
    endothelial) rather than finer subtypes, so cluster counts are
    robust enough to compare across QC conditions.
-6. **UMAP** — `RunUMAP(dims = 1:25, return.model = TRUE)` (model retained
+6. **UMAP** - `RunUMAP(dims = 1:25, return.model = TRUE)` (model retained
    for projection in the next step).
 7. **Project to all cells** — `ProjectData()` transfers `seurat_clusters`
-   labels from the 50k sketch to the full (filtered) object as
+   labels from the 50k subsample to all cells in the filtered object as
    `cluster_full`, using the retained PCA/UMAP models.
 
 ## 4. Cross-condition comparison

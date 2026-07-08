@@ -6,7 +6,7 @@ composition in spatial transcriptomics data.
 
 ## Overview
 
-Xenium is an imaging-based spatial transcriptomics platform. It directly detects and
+Xenium is an imaging based spatial transcriptomics platform. It directly detects and
 counts individual RNA transcripts in situ (on intact tissue sections), and
 assigns each transcript to a cell based on its spatial coordinates. This
 preserves the tissue architecture (which is lost when tissue is dissociated for single cell RNA-seq), 
@@ -17,9 +17,8 @@ so per-cell counts are extremely sparse (median ~49 transcripts and ~46
 genes/cell in this dataset).
 
 This sparsity makes it important to tune cell-level QC filters with the broader biological question in mind. 
-With overly lenient filters, low-quality or empty "cells" (segmentation artifacts, background
-signal) can dilute or fabricate clusters. Overly strict filters lead to rare cell populations being discarded as noise. This project
-addresses: **how much does QC filtering stringency actually change the clusters
+With overly lenient filters, low quality or empty "cells" (segmentation artifacts, background
+signal) can dilute or fabricate clusters. Overly strict filters lead to rare cell populations being discarded as noise. This project addresses: **how much does QC filtering stringency actually change the clusters
 and cell type composition recovered from a Xenium 5K breast cancer
 dataset?** The question is motivated by recent work (*Nature Methods*, 2026)
 on the SPLIT method, which highlights transcript diffusion and signal
@@ -68,14 +67,16 @@ xenium_breast_cancer_analysis/
 │   └── .gitkeep                      (raw data and .rds files not tracked)
 ├── notebooks/
 │   ├── 01_load_and_qc.Rmd            Load data and baseline QC exploration
-│   ├── 02_clustering.Rmd             Standard pipeline (sketch-based), unfiltered baseline
-│   ├── 03_qc_comparison.Rmd          Three-threshold QC comparison
+│   ├── 02_clustering.Rmd             Standard pipeline, unfiltered baseline
+│   ├── 03_qc_comparison.Rmd          Three QC threshold comparison
 │   └── 04_spatial_visualization.Rmd  Marker genes and spatial figures
-├── figures/                          All output plots (PNG) and summary tables (CSV)
+├── figures/                          
+│   ├── xenium_qc_summary_slides.pdf  4 slide visual summary
+│   └── ...                            all output plots and tables
 ├── environment/
-│   ├── package_install.R             one-off package installation script  
+│   ├── package_install.R             package installation script  
 └── docs/
-    └── methods.md                    detailed methods write-up
+    └── methods.md                    detailed methods
 ```
 
 ## How to Reproduce
@@ -90,12 +91,10 @@ xenium_breast_cancer_analysis/
    renv::restore()
    ```
 4. Point the notebooks at your local copy of the raw data
-5. Run the notebooks in order - each is self-contained (loads its own raw
-   or intermediate data) except where noted:
+5. Run the notebooks in order. Each is self-contained except where noted:
    - **`01_load_and_qc.Rmd`** - loads raw data, outputs baseline QC violin
      plot + summary stats. No dependency on other notebooks
-   - **`02_clustering.Rmd`** - loads raw data, runs the full sketch ->
-     cluster project pipeline on the unfiltered object, saves
+   - **`02_clustering.Rmd`** - loads raw data, runs the full project pipeline on the unfiltered object, saves
      `data/xenium_standard.rds`
    - **`03_qc_comparison.Rmd`** - loads raw data, applies all three QC
      thresholds, runs the pipeline three times, saves
@@ -123,8 +122,7 @@ on the subsample, and cluster labels were projected back to all cells using
 attempted but requires >32GB RAM for this dataset size; random subsampling 
 was used as an alternative.
 
-**Tools** Seurat 5 (`LoadXenium()`, `SketchData()`, `ProjectData()`,
-`ImageDimPlot()`) for the core pipeline and spatial visualization;
+**Tools** Seurat 5 (`LoadXenium()`, `ImageDimPlot()`) for the core pipeline and spatial visualization;
 `ggplot2`/`patchwork` for figure composition; `renv` for environment
 reproducibility. Pipeline structure follows 10x Genomics Xenium 5K
 analysis tutorial (linked below).
@@ -134,7 +132,8 @@ analysis tutorial (linked below).
 - Raw data: [10x Genomics Xenium Prime 5K Breast Cancer FFPE dataset](https://www.10xgenomics.com/datasets).
 - Pipeline adapted from the [10x Genomics Xenium 5K data analysis tutorial](https://github.com/10XGenomics/analysis_guides/blob/main/Xenium_5k_data_analysis_journey.ipynb).
 - QC comparison framing inspired by the SPLIT method (*Nature Methods*,
-  2026) on transcript diffusion in Xenium 5K data.
+  2026) on transcript diffusion in Xenium 5K data. 
+    Bilous M, Buszta D, Bac J, Kang S, Dong Y, Tissot S, Andre S, Alexandre Gaveta M, Voize C, Peters S, Homicsko K, Gottardo R. Resolving sensitivity, specificity and signal contamination in Xenium spatial transcriptomics. Nat Methods. 2026 Jun;23(6):1152-1162. doi: 10.1038/s41592-026-03089-8. Epub 2026 Apr 30. PMID: 42062553; PMCID: PMC13259927.
 
 ## Acknowledgements
 Code documentation and repository structure were refined with assistance 
