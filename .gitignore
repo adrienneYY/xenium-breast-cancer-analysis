@@ -31,3 +31,4 @@ renv/staging/
 # Leftover path from an earlier project layout
 one-sample-analysis/
 .RDataTmp*
+scripts/
